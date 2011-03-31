@@ -16,6 +16,9 @@ import config
 import metadata
 from plugin import EncodeUnicode, Plugin
 
+import calendar
+import time
+
 logger = logging.getLogger('pyTivo.togo')
 tag_data = metadata.tag_data
 
@@ -74,6 +77,10 @@ class ToGo(Plugin):
 
                 # Throw the error otherwise
                 raise
+
+    def update_name(self, mkv_name, field):
+        if field:
+            mkv_name.insert(-1, ' - ' + field)
 
     def NPL(self, handler, query):
         global basic_meta
@@ -207,6 +214,8 @@ class ToGo(Plugin):
 
         name = unquote(parse_url[2])[10:].split('.')
         id = unquote(parse_url[4]).split('id=')[1]
+        mkv_name = name[:]
+        mkv_name[-1] = ' - ' + id + '.mkv'
         name.insert(-1, ' - ' + id + '.')
         if status[url]['decode']:
             name[-1] = 'mpg'
@@ -224,6 +233,10 @@ class ToGo(Plugin):
             metafile = open(outfile + '.txt', 'w')
             metadata.dump(metafile, meta)
             metafile.close()
+            if meta.get('time', ''):
+               e_time = calendar.timegm(time.strptime(meta['time'], '%Y-%m-%dT%H:%M:%SZ'))
+               self.update_name(mkv_name, time.strftime('%m-%d %a', time.localtime(e_time)))
+            self.update_name(mkv_name, meta.get('episodeTitle', ''))
 
         auth_handler.add_password('TiVo DVR', url, 'tivo', mak)
         try:
@@ -283,6 +296,9 @@ class ToGo(Plugin):
                         (time.strftime('%d/%b/%Y %H:%M:%S'), outfile,
                          tivo_name, size, rate))
             status[url]['running'] = False
+            #convert to Mkv on a seperate thread
+            mkvfile = os.path.join(togo_path, ''.join(mkv_name))
+            thread.start_new_thread(subprocess.call, (['/home/raghu/bin/TivoMpgToMkv.sh', outfile, mkvfile],))
         else:
             os.remove(outfile)
             if status[url]['save']:
