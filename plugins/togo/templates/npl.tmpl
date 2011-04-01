@@ -74,6 +74,11 @@
 			#if 'displayMajorNumber' in $row and 'callsign' in $row
 			$row['displayMajorNumber'] $row['callsign']
 			#end if
+			#if 'locally_exists' in $row
+				<div class="queued">
+				Already saved
+				</div>
+			#end if
 			</span>
 			#if 'Url' in $row and row['Url'] in $status
 				#set $this_status = $status[$row['Url']]

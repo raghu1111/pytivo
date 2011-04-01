@@ -4,6 +4,7 @@ import os
 import subprocess
 import thread
 import time
+import re
 import urllib2
 import urlparse
 from urllib import quote, unquote
@@ -53,6 +54,7 @@ status = {} # Global variable to control download threads
 tivo_cache = {} # Cache of TiVo NPL
 queue = {} # Recordings to download -- list per TiVo
 basic_meta = {} # Data from NPL, parsed, indexed by progam URL
+cmd_queue = []
 
 auth_handler = urllib2.HTTPDigestAuthHandler()
 cj = cookielib.LWPCookieJar()
@@ -67,7 +69,7 @@ class ToGo(Plugin):
         while True:
             try:
                 # Open the URL using our authentication/cookie opener
-                return tivo_opener.open(url)
+                return tivo_opener.open(url, timeout=60)
 
             # Do a retry if the TiVo responds that the server is busy
             except urllib2.HTTPError, e:
@@ -91,6 +93,13 @@ class ToGo(Plugin):
         has_tivodecode = bool(config.get_bin('tivodecode'))
 
         if 'TiVo' in query:
+            #get a list of files already converted
+            locally_exists = {}
+            for dir, subdirs, files in os.walk(config.get_server('togo_path')):
+                for f in files:
+                    match = re.search(' - (\d+).m4v$', f)
+                    if match : locally_exists[match.group(1)] = f
+            
             tivoIP = query['TiVo'][0]
             tivos_by_ip = dict([(value, key)
                                 for key, value in config.tivos.items()])
@@ -160,8 +169,13 @@ class ToGo(Plugin):
                     entry['Duration'] = ( '%02d:%02d:%02d' %
                         (dur / 3600, (dur % 3600) / 60, dur % 60) )
 
-                    entry['CaptureDate'] = time.strftime('%b %d, %Y',
+                    entry['CaptureDate'] = time.strftime('%b %d, %Y %H:%M',
                         time.localtime(int(entry['CaptureDate'], 16)))
+                    
+		    match = re.search('id=(\d+)', entry['Url'])
+		    if match and match.group(1) in locally_exists:
+			logger.info('YYY : found ' + match.group(1)) 
+                        entry['locally_exists'] = True
 
                     url = entry['Url']
                     if url in basic_meta:
@@ -298,7 +312,7 @@ class ToGo(Plugin):
             status[url]['running'] = False
             #convert to Mkv on a seperate thread
             mkvfile = os.path.join(togo_path, ''.join(mkv_name))
-            thread.start_new_thread(subprocess.call, (['/home/raghu/bin/TivoMpgToMkv.sh', outfile, mkvfile],))
+            self.enqueue_cmd(['/home/raghu/bin/TivoMpgToMkv.sh', outfile, mkvfile])
         else:
             os.remove(outfile)
             if status[url]['save']:
@@ -360,3 +374,15 @@ class ToGo(Plugin):
                     (time.strftime('%d/%b/%Y %H:%M:%S'),
                      unquote(theurl)))
         handler.redir(UNQUEUE % unquote(theurl))
+
+    def enqueue_cmd(self, args):
+        cmd_queue.append(args)
+        if len(cmd_queue) == 1:
+            thread.start_new_thread(ToGo.process_cmd_queue, (self,))
+
+    def process_cmd_queue(self):
+        while len(cmd_queue) > 0:
+	    args = cmd_queue[0]
+	    logger.info('Running cmd : ' + ' '.join(args))
+            subprocess.call(args)
+	    cmd_queue.pop(0)
