@@ -80,9 +80,9 @@ class ToGo(Plugin):
                 # Throw the error otherwise
                 raise
 
-    def update_name(self, mkv_name, field):
+    def update_name(self, file_name, field):
         if field:
-            mkv_name.insert(-1, ' - ' + field)
+            file_name.insert(-1, ' - ' + field)
 
     def NPL(self, handler, query):
         global basic_meta
@@ -227,8 +227,8 @@ class ToGo(Plugin):
 
         name = unquote(parse_url[2])[10:].split('.')
         id = unquote(parse_url[4]).split('id=')[1]
-        mkv_name = name[:]
-        mkv_name[-1] = ' - ' + id + '.mkv'
+        m4v_name = name[:]
+        m4v_name[-1] = ' - ' + id + '.m4v'
         name.insert(-1, ' - ' + id + '.')
         if status[url]['decode']:
             name[-1] = 'mpg'
@@ -248,8 +248,8 @@ class ToGo(Plugin):
             metafile.close()
             if meta.get('time', ''):
                e_time = calendar.timegm(time.strptime(meta['time'], '%Y-%m-%dT%H:%M:%SZ'))
-               self.update_name(mkv_name, time.strftime('%m-%d %a', time.localtime(e_time)))
-            self.update_name(mkv_name, meta.get('episodeTitle', ''))
+               self.update_name(m4v_name, time.strftime('%m-%d %a', time.localtime(e_time)))
+            self.update_name(m4v_name, meta.get('episodeTitle', ''))
 
         auth_handler.add_password('TiVo DVR', url, 'tivo', mak)
         try:
@@ -309,9 +309,9 @@ class ToGo(Plugin):
                         (time.strftime('%d/%b/%Y %H:%M:%S'), outfile,
                          tivo_name, size, rate))
             status[url]['running'] = False
-            #convert to Mkv on a seperate thread
-            mkvfile = os.path.join(togo_path, ''.join(mkv_name))
-            self.enqueue_cmd(['/home/raghu/bin/TivoMpgToMkv.sh', outfile, mkvfile])
+            #convert to m4v on a seperate thread
+            m4vfile = os.path.join(togo_path, ''.join(m4v_name))
+            self.enqueue_cmd(['/home/raghu/bin/TivoMpgToM4v.sh', outfile, m4vfile])
         else:
             os.remove(outfile)
             if status[url]['save']:
