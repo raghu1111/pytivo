@@ -84,6 +84,14 @@ class ToGo(Plugin):
         if field:
             file_name.insert(-1, ' - ' + field)
 
+    def get_saved_ids(self):
+        saved_ids = {}
+        for dir, subdirs, files in os.walk(config.get_server('togo_path')):
+            for f in files:
+                match = re.search(' - (\d+).m4v$', f)
+                if match : saved_ids[match.group(1)] = f
+        return saved_ids
+
     def NPL(self, handler, query):
         global basic_meta
         shows_per_page = 50 # Change this to alter the number of shows returned
@@ -94,12 +102,8 @@ class ToGo(Plugin):
 
         if 'TiVo' in query:
             #get a list of files already converted
-            locally_exists = {}
-            for dir, subdirs, files in os.walk(config.get_server('togo_path')):
-                for f in files:
-                    match = re.search(' - (\d+).m4v$', f)
-                    if match : locally_exists[match.group(1)] = f
-            
+            locally_exists = self.get_saved_ids()
+
             tivoIP = query['TiVo'][0]
             tivos_by_ip = dict([(value, key)
                                 for key, value in config.tivos.items()])
@@ -341,24 +345,28 @@ class ToGo(Plugin):
             decode = 'decode' in query
             save = 'save' in query
             for theurl in urls:
-                status[theurl] = {'running': False, 'error': '', 'rate': '',
-                                  'queued': True, 'size': 0, 'finished': False,
-                                  'decode': decode, 'save': save}
-                if tivoIP in queue:
-                    queue[tivoIP].append(theurl)
-                else:
-                    queue[tivoIP] = [theurl]
-                    thread.start_new_thread(ToGo.process_queue,
-                                            (self, tivoIP, tivo_mak, togo_path))
-                logger.info('[%s] Queued "%s" for transfer to %s' %
-                            (time.strftime('%d/%b/%Y %H:%M:%S'),
-                             unquote(theurl), togo_path))
+                self.enqueue_url(theurl, tivoIP, tivo_mak, togo_path, decode, save)
+
             urlstring = '<br>'.join([unquote(x) for x in urls])
             message = TRANS_QUEUE % (urlstring, togo_path)
         else:
             message = MISSING
         handler.redir(message, 5)
 
+    def enqueue_url(self, theurl, tivoIP, tivo_mak, togo_path, decode, save):
+        status[theurl] = {'running': False, 'error': '', 'rate': '',
+                          'queued': True, 'size': 0, 'finished': False,
+                          'decode': decode, 'save': save}
+        if tivoIP in queue:
+            queue[tivoIP].append(theurl)
+        else:
+            queue[tivoIP] = [theurl]
+            thread.start_new_thread(ToGo.process_queue,
+                                    (self, tivoIP, tivo_mak, togo_path))
+        logger.info('[%s] Queued "%s" for transfer to %s' %
+                    (time.strftime('%d/%b/%Y %H:%M:%S'),
+                     unquote(theurl), togo_path))
+ 
     def ToGoStop(self, handler, query):
         theurl = query['Url'][0]
         status[theurl]['running'] = False
