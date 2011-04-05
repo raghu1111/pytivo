@@ -69,7 +69,7 @@ class ToGo(Plugin):
         while True:
             try:
                 # Open the URL using our authentication/cookie opener
-                return tivo_opener.open(url, timeout=60)
+                return tivo_opener.open(url, timeout=600)
 
             # Do a retry if the TiVo responds that the server is busy
             except urllib2.HTTPError, e:
@@ -172,9 +172,8 @@ class ToGo(Plugin):
                     entry['CaptureDate'] = time.strftime('%b %d, %Y %H:%M',
                         time.localtime(int(entry['CaptureDate'], 16)))
                     
-		    match = re.search('id=(\d+)', entry['Url'])
-		    if match and match.group(1) in locally_exists:
-			logger.info('YYY : found ' + match.group(1)) 
+                    match = re.search('id=(\d+)', entry['Url'])
+                    if match and match.group(1) in locally_exists:
                         entry['locally_exists'] = True
 
                     url = entry['Url']
