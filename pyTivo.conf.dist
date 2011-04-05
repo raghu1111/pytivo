@@ -87,3 +87,8 @@ path=/home/armooo/Videos
 #[MyTelevision]
 #type=video
 #path=d:\television
+
+#Auto togo will automatically transfer titles listed
+#[auto_togo]
+#title[0] = Nova scienceNOW
+#title[1] = NOVA

@@ -163,7 +163,7 @@ def getShares(tsn=''):
                       or section.startswith('handler_')
                       or section.startswith('formatter_')
                       or section in ('Server', 'loggers', 'handlers',
-                                     'formatters')
+                                     'formatters', 'auto_togo')
               )
     ]
 
@@ -410,3 +410,10 @@ def init_logging():
         logging.basicConfig(level=logging.DEBUG)
     else:
         logging.basicConfig(level=logging.INFO)
+
+def auto_togo():
+    if config.has_section('auto_togo'):
+        titles = [item[1] for item in config.items('auto_togo') if item[0].startswith("title")]
+    else:
+        titles = []
+    return titles

@@ -9,6 +9,7 @@ if sys.version_info[0] != 2 or sys.version_info[1] < 4:
     sys.exit(1)
 
 import beacon
+import autotogo
 import config
 import httpserver
 from plugin import GetPlugin
@@ -55,10 +56,14 @@ b.start()
 if 'listen' in config.getBeaconAddresses():
     b.listen()
 
+t = autotogo.AutoToGo()
+t.start()
+
 logger.info('pyTivo is ready.')
 
 try:
     httpd.set_beacon(b)
     httpd.serve_forever()
 except KeyboardInterrupt:
+    t.stop()
     b.stop()
