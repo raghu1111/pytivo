@@ -80,10 +80,6 @@ class ToGo(Plugin):
                 # Throw the error otherwise
                 raise
 
-    def update_name(self, file_name, field):
-        if field:
-            file_name.insert(-1, ' - ' + field)
-
     def get_saved_ids(self):
         saved_ids = {}
         for dir, subdirs, files in os.walk(config.get_server('togo_path')):
@@ -231,8 +227,6 @@ class ToGo(Plugin):
 
         name = unquote(parse_url[2])[10:].split('.')
         id = unquote(parse_url[4]).split('id=')[1]
-        m4v_name = name[:]
-        m4v_name[-1] = ' - ' + id + '.m4v'
         name.insert(-1, ' - ' + id + '.')
         if status[url]['decode']:
             name[-1] = 'mpg'
@@ -250,10 +244,6 @@ class ToGo(Plugin):
             metafile = open(outfile + '.txt', 'w')
             metadata.dump(metafile, meta)
             metafile.close()
-            if meta.get('time', ''):
-               e_time = calendar.timegm(time.strptime(meta['time'], '%Y-%m-%dT%H:%M:%SZ'))
-               self.update_name(m4v_name, time.strftime('%m-%d %a', time.localtime(e_time)))
-            self.update_name(m4v_name, meta.get('episodeTitle', ''))
 
         auth_handler.add_password('TiVo DVR', url, 'tivo', mak)
         try:
@@ -313,9 +303,9 @@ class ToGo(Plugin):
                         (time.strftime('%d/%b/%Y %H:%M:%S'), outfile,
                          tivo_name, size, rate))
             status[url]['running'] = False
-            #convert to m4v on a seperate thread
-            m4vfile = os.path.join(togo_path, ''.join(m4v_name))
-            self.enqueue_cmd(['/home/raghu/bin/TivoMpgToM4v.sh', outfile, m4vfile])
+            post_process_cmd = config.get_server('togo_post_process_command')
+            if post_process_cmd:
+                self.enqueue_cmd(post_process_cmd, outfile)
         else:
             os.remove(outfile)
             if status[url]['save']:
