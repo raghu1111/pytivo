@@ -50,6 +50,7 @@ status = {} # Global variable to control download threads
 tivo_cache = {} # Cache of TiVo NPL
 queue = {} # Recordings to download -- list per TiVo
 basic_meta = {} # Data from NPL, parsed, indexed by progam URL
+cmd_queue = []
 
 auth_handler = urllib2.HTTPDigestAuthHandler()
 cj = cookielib.LWPCookieJar()
@@ -283,6 +284,9 @@ class ToGo(Plugin):
                         (time.strftime('%d/%b/%Y %H:%M:%S'), outfile,
                          tivo_name, size, rate))
             status[url]['running'] = False
+            post_process_cmd = config.get_server('togo_post_process_command')
+            if post_process_cmd:
+                self.enqueue_cmd([post_process_cmd, outfile])
         else:
             os.remove(outfile)
             if status[url]['save']:
@@ -344,3 +348,15 @@ class ToGo(Plugin):
                     (time.strftime('%d/%b/%Y %H:%M:%S'),
                      unquote(theurl)))
         handler.redir(UNQUEUE % unquote(theurl))
+
+    def enqueue_cmd(self, args):
+        cmd_queue.append(args)
+        if len(cmd_queue) == 1:
+            thread.start_new_thread(ToGo.process_cmd_queue, (self,))
+
+    def process_cmd_queue(self):
+        while len(cmd_queue) > 0:
+            args = cmd_queue[0]
+            logger.info('Running cmd : ' + ' '.join(args))
+            subprocess.call(args)
+            cmd_queue.pop(0)
