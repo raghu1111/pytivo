@@ -88,7 +88,7 @@ class ToGo(Plugin):
         saved_ids = {}
         for dir, subdirs, files in os.walk(config.get_server('togo_path')):
             for f in files:
-                match = re.search(' - (\d+)\.m..$', f)
+                match = re.search(' - (\d+)\.(m4v|mkv|mp4)$', f)
                 if match : saved_ids[match.group(1)] = f
         return saved_ids
 
