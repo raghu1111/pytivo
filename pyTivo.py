@@ -9,7 +9,6 @@ if sys.version_info[0] != 2 or sys.version_info[1] < 4:
     sys.exit(1)
 
 import beacon
-import autotogo
 import config
 import httpserver
 from plugin import GetPlugin
@@ -21,6 +20,9 @@ def exceptionLogger(*args):
 config.init(sys.argv[1:])
 config.init_logging()
 sys.excepthook = exceptionLogger
+
+#import internal modules after initializing logging
+import autotogo
 
 port = config.getPort()
 
