@@ -290,6 +290,7 @@ class ToGo(Plugin):
                 status[url]['finished'] = True
         except Exception, msg:
             logger.info(msg)
+            status[url]['error'] = msg 
         handle.close()
         f.close()
         status[url]['size'] += length
@@ -304,8 +305,8 @@ class ToGo(Plugin):
                          tivo_name, size, rate))
             status[url]['running'] = False
             post_process_cmd = config.get_server('togo_post_process_command')
-            if post_process_cmd:
-                self.enqueue_cmd(post_process_cmd, outfile)
+            if post_process_cmd and not status[url]['error']:
+                self.enqueue_cmd([post_process_cmd, outfile])
         else:
             os.remove(outfile)
             if status[url]['save']:
