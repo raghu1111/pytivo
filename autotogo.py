@@ -64,7 +64,7 @@ class AutoToGo:
                     if re.search('id=(\d+)', theUrl).group(1) in saved_ids:
                         continue
 
-                    if not (tivoIP in togo.queue and theUrl in togo.queue[tivoIP]):
+		    if not theUrl in togo.status:
                         logger.info('adding %s' % theUrl)
                         togo.basic_meta[theUrl] = metadata.from_container(item)
                         myToGo.enqueue_url(theUrl, tivoIP, tivo_mak, togo_path, True, True)
@@ -72,7 +72,10 @@ class AutoToGo:
     def start(self):
         # Only activate if we have titles defined to transfer
         if config.auto_togo():
-            self.transfer()
+	    try:
+		self.transfer()
+	    except Exception, msg:
+		logger.info(msg)
             self.timer = Timer(1800, self.start)
             self.timer.start()
 
