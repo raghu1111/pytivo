@@ -240,11 +240,12 @@ def from_text(full_path):
     path, name = os.path.split(unicode(full_path, 'utf-8'))
     title, ext = os.path.splitext(name)
 
-    for metafile in [os.path.join(path, title) + '.properties',
+    for metafile in [config.get_server('default_metadata_file'),
+                     os.path.join(path, title) + '.properties',
                      os.path.join(path, 'default.txt'), full_path + '.txt',
                      os.path.join(path, '.meta', 'default.txt'),
                      os.path.join(path, '.meta', name) + '.txt']:
-        if os.path.exists(metafile):
+        if metafile and os.path.exists(metafile):
             sep = ':='[metafile.endswith('.properties')]
             for line in file(metafile, 'U'):
                 if line.startswith(BOM):
