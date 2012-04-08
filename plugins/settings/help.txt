@@ -43,14 +43,12 @@ blank.  If this is a known share the name will remain after a save. If
 the setting is a user defined setting the name will be deleted after the 
 save.
 Save Settings: Clicking Save Settings will write your changes to the 
-pyTivo.conf file. These settings will not have an effect on your pyTivo 
+pyTivo.conf file. These settings may not have an effect on your pyTivo 
 server until it is Soft Reset or restarted.
-Soft Reset: Soft Reset allows your new settings to take effect without 
-manually restarting the TiVo.  The Soft Reset will cause a re-read of 
-the pyTivo.conf file so your changes must be saved to the file before 
-the reset.
-Note: The only setting that will not take effect until a hard restart is 
-the Port setting.  Changing the Port setting requires a full restart.
+Soft Reset: Soft Reset allows most new settings to take effect without 
+restarting pyTivo.  The Soft Reset will cause a re-read of the
+pyTivo.conf file so your changes must be saved to the file before the
+reset.
 
 Add_a_New_Section
 
@@ -581,7 +579,7 @@ Description: Your username (email address) at tivo.com. This is required
 for the "Push" feature. If you don't plan to use Push, you don't need to 
 set this.
 Example Settings: user@example.com
-Available In: Server
+Available In: Server, Tivos, HD_tivos, SD_tivos
 
 tivo_password
 
@@ -592,7 +590,7 @@ Skill: Basic
 Description: Your password at tivo.com. This is required for the "Push" 
 feature. If you don't plan to use Push, you don't need to set this.
 Example Settings: password
-Available In: Server
+Available In: Server, Tivos, HD_tivos, SD_tivos
 
 tivo_mind
 
@@ -620,7 +618,7 @@ tivodecode (pushing .TiVo files, transcoding HD .TiVo files to SD
 TiVos). If you don't plan to use these features, you don't need to set 
 this.
 Example Settings: 012345678
-Available In: Server
+Available In: Server, Tivos, HD_tivos, SD_tivos
 
 togo_path
 

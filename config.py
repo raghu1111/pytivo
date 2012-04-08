@@ -10,22 +10,18 @@ import string
 import sys
 from ConfigParser import NoOptionError
 
-guid = ''.join([random.choice(string.letters) for i in range(10)])
-our_ip = ''
-config = ConfigParser.ConfigParser()
-
-p = os.path.dirname(__file__)
-config_files = ['/etc/pyTivo.conf', os.path.join(p, 'pyTivo.conf')]
-configs_found = []
-
-tivos = {}
-tivo_names = {}
-bin_paths = {}
-
 def init(argv):
-    global config_files
-    global configs_found
+    global tivos
     global tivo_names
+    global guid
+    global config_files
+
+    tivos = {}
+    tivo_names = {}
+    guid = ''.join([random.choice(string.ascii_letters) for i in range(10)])
+
+    p = os.path.dirname(__file__)
+    config_files = ['/etc/pyTivo.conf', os.path.join(p, 'pyTivo.conf')]
 
     try:
         opts, _ = getopt.getopt(argv, 'c:e:', ['config=', 'extraconf='])
@@ -38,11 +34,21 @@ def init(argv):
         elif opt in ('-e', '--extraconf'):
             config_files.append(value)
 
+    reset()
+
+def reset():
+    global bin_paths
+    global config
+    global configs_found
+
+    bin_paths = {}
+
+    config = ConfigParser.ConfigParser()
     configs_found = config.read(config_files)
     if not configs_found:
-        print ('ERROR: pyTivo.conf does not exist.\n' +
-               'You must create this file before running pyTivo.')
-        sys.exit(1)
+        print ('WARNING: pyTivo.conf does not exist.\n' +
+               'Assuming default values.')
+        configs_found = config_files[-1:]
 
     for section in config.sections():
         if section.startswith('_tivo_'):
@@ -55,18 +61,19 @@ def init(argv):
                 if config.has_option(section, 'address'):
                     tivos[tsn] = config.get(section, 'address')
 
-def reset():
-    global config
-    global bin_paths
-    bin_paths.clear()
-    newconfig = ConfigParser.ConfigParser()
-    newconfig.read(config_files)
-    config = newconfig
+    for section in ['Server', '_tivo_SD', '_tivo_HD']:
+        if not config.has_section(section):
+            config.add_section(section)
 
 def write():
     f = open(configs_found[-1], 'w')
     config.write(f)
     f.close()
+
+def tivos_by_ip(tivoIP):
+    for key, value in tivos.items():
+        if value == tivoIP:
+            return key
 
 def get_server(name, default=None):
     if config.has_option('Server', name):
@@ -77,13 +84,11 @@ def get_server(name, default=None):
 def getGUID():
     return guid
 
-def get_ip():
-    global our_ip
-    if not our_ip:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('4.2.2.1', 123))
-        our_ip = s.getsockname()[0]
-    return our_ip
+def get_ip(tsn=None):
+    dest_ip = tivos.get(tsn, '4.2.2.1')
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.connect((dest_ip, 123))
+    return s.getsockname()[0]
 
 def get_zc():
     opt = get_server('zeroconf', 'auto').lower()
@@ -193,21 +198,16 @@ def getDebug():
         return False
 
 def getOptres(tsn=None):
-    if tsn and config.has_section('_tivo_' + tsn):
-        try:
-            return config.getboolean('_tivo_' + tsn, 'optres')
-        except NoOptionError, ValueError:
-            pass
-    section_name = get_section(tsn)
-    if config.has_section(section_name):
-        try:
-            return config.getboolean(section_name, 'optres')
-        except NoOptionError, ValueError:
-            pass
     try:
-        return config.getboolean('Server', 'optres')
-    except NoOptionError, ValueError:
-        return False
+        return config.getboolean('_tivo_' + tsn, 'optres')
+    except:
+        try:
+            return config.getboolean(get_section(tsn), 'optres')
+        except:
+            try:
+                return config.getboolean('Server', 'optres')
+            except:
+                return False
 
 def getPixelAR(ref):
     if config.has_option('Server', 'par'):
@@ -268,6 +268,13 @@ def getFFmpegPrams(tsn):
 
 def isHDtivo(tsn):  # tsn's of High Definition Tivo's
     return bool(tsn and tsn[0] >= '6' and tsn[:3] != '649')
+
+def hasTStivo(tsn):  # tsn's of Tivos that support transport streams
+    try:
+        return config.getboolean('Server', 'ts')
+    except NoOptionError, ValueError:
+        return False
+    return bool(tsn and (tsn[0] >= '7' or tsn.startswith('663')))
 
 def getValidWidths():
     return [1920, 1440, 1280, 720, 704, 544, 480, 352]
@@ -355,22 +362,16 @@ def get_section(tsn):
     return ['_tivo_SD', '_tivo_HD'][isHDtivo(tsn)]
 
 def get_tsn(name, tsn=None, raw=False):
-    if tsn and config.has_section('_tivo_' + tsn):
-        try:
-            return config.get('_tivo_' + tsn, name, raw)
-        except NoOptionError:
-            pass
-    section_name = get_section(tsn)
-    if config.has_section(section_name):
-        try:
-            return config.get(section_name, name, raw)
-        except NoOptionError:
-            pass
     try:
-        return config.get('Server', name, raw)
-    except NoOptionError:
-        pass
-    return None
+        return config.get('_tivo_' + tsn, name, raw)
+    except:
+        try:
+            return config.get(get_section(tsn), name, raw)
+        except:
+            try:
+                return config.get('Server', name, raw)
+            except:
+                return None
 
 # Parse a bitrate using the SI/IEEE suffix values as if by ffmpeg
 # For example, 2K==2000, 2Ki==2048, 2MB==16000000, 2MiB==16777216

@@ -17,9 +17,13 @@ CLASS_NAME = 'Settings'
 RESET_MSG = """<h3>Soft Reset</h3> <p>pyTivo has reloaded the 
 pyTivo.conf file and all changes should now be in effect.</p>"""
 
+RESTART_MSG = """<h3>Restart</h3> <p>pyTivo will now restart.</p>"""
+
+GOODBYE_MSG = 'Goodbye.\n'
+
 SETTINGS_MSG = """<h3>Settings Saved</h3> <p>Your settings have been 
-saved to the pyTivo.conf file. However you will need to do a <b>Soft 
-Reset</b> before these changes will take effect.</p>"""
+saved to the pyTivo.conf file. However you may need to do a <b>Soft 
+Reset</b> or <b>Restart</b> before these changes will take effect.</p>"""
 
 # Preload the templates
 tsname = os.path.join(SCRIPTDIR, 'templates', 'settings.tmpl')
@@ -27,6 +31,27 @@ SETTINGS_TEMPLATE = file(tsname, 'rb').read()
 
 class Settings(Plugin):
     CONTENT_TYPE = 'text/html'
+
+    def Quit(self, handler, query):
+        if hasattr(handler.server, 'shutdown'):
+            handler.send_fixed(GOODBYE_MSG, 'text/plain')
+            if handler.server.in_service:
+                handler.server.stop = True
+            else:
+                handler.server.shutdown()
+        else:
+            handler.send_error(501)
+
+    def Restart(self, handler, query):
+        if hasattr(handler.server, 'shutdown'):
+            handler.redir(RESTART_MSG, 10)
+            handler.server.restart = True
+            if handler.server.in_service:
+                handler.server.stop = True
+            else:
+                handler.server.shutdown()
+        else:
+            handler.send_error(501)
 
     def Reset(self, handler, query):
         config.reset()
@@ -49,21 +74,14 @@ class Settings(Plugin):
                                         dict(config.config.items(section,
                                                                  raw=True))))
 
-        cname = query['Container'][0].split('/')[0]
         t = Template(SETTINGS_TEMPLATE, filter=EncodeUnicode)
-        t.container = cname
+        t.container = handler.cname
         t.quote = quote
         t.server_data = dict(config.config.items('Server', raw=True))
         t.server_known = buildhelp.getknown('server')
-        if config.config.has_section('_tivo_HD'):
-            t.hd_tivos_data = dict(config.config.items('_tivo_HD', raw=True))
-        else:
-            t.hd_tivos_data = {}
+        t.hd_tivos_data = dict(config.config.items('_tivo_HD', raw=True))
         t.hd_tivos_known = buildhelp.getknown('hd_tivos')
-        if config.config.has_section('_tivo_SD'):
-            t.sd_tivos_data = dict(config.config.items('_tivo_SD', raw=True))
-        else:
-            t.sd_tivos_data = {}
+        t.sd_tivos_data = dict(config.config.items('_tivo_SD', raw=True))
         t.sd_tivos_known = buildhelp.getknown('sd_tivos')
         t.shares_data = shares_data
         t.shares_known = buildhelp.getknown('shares')
@@ -74,11 +92,8 @@ class Settings(Plugin):
                         and not section.startswith('_tivo_HD')]
         t.tivos_known = buildhelp.getknown('tivos')
         t.help_list = buildhelp.gethelp()
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'text/html; charset=utf-8')
-        handler.send_header('Expires', '0')
-        handler.end_headers()
-        handler.wfile.write(t)
+        t.has_shutdown = hasattr(handler.server, 'shutdown')
+        handler.send_html(str(t))
 
     def UpdateSettings(self, handler, query):
         config.reset()

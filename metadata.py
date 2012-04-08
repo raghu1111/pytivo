@@ -5,6 +5,7 @@ import subprocess
 import sys
 from datetime import datetime
 from xml.dom import minidom
+from xml.parsers import expat
 try:
     import plistlib
 except:
@@ -14,40 +15,49 @@ import mutagen
 from lrucache import LRUCache
 
 import config
+import plugins.video.transcode
 
 # Something to strip
 TRIBUNE_CR = ' Copyright Tribune Media Services, Inc.'
 
-TV_RATINGS = {'TV-Y7': 'x1', 'TV-Y': 'x2', 'TV-G': 'x3', 'TV-PG': 'x4', 
-              'TV-14': 'x5', 'TV-MA': 'x6', 'TV-NR': 'x7',
-              'TVY7': 'x1', 'TVY': 'x2', 'TVG': 'x3', 'TVPG': 'x4', 
-              'TV14': 'x5', 'TVMA': 'x6', 'TVNR': 'x7',
-              'Y7': 'x1', 'Y': 'x2', 'G': 'x3', 'PG': 'x4',
-              '14': 'x5', 'MA': 'x6', 'NR': 'x7', 'UNRATED': 'x7'}
+TV_RATINGS = {'TV-Y7': 1, 'TV-Y': 2, 'TV-G': 3, 'TV-PG': 4, 'TV-14': 5,
+              'TV-MA': 6, 'TV-NR': 7, 'TVY7': 1, 'TVY': 2, 'TVG': 3,
+              'TVPG': 4, 'TV14': 5, 'TVMA': 6, 'TVNR': 7, 'Y7': 1,
+              'Y': 2, 'G': 3, 'PG': 4, '14': 5, 'MA': 6, 'NR': 7,
+              'UNRATED': 7, 'X1': 1, 'X2': 2, 'X3': 3, 'X4': 4, 'X5': 5,
+              'X6': 6, 'X7': 7}
 
-MPAA_RATINGS = {'G': 'G1', 'PG': 'P2', 'PG-13': 'P3', 'PG13': 'P3',
-                'R': 'R4', 'X': 'X5', 'NC-17': 'N6', 'NC17': 'N6',
-                'NR': 'N8', 'UNRATED': 'N8'}
+MPAA_RATINGS = {'G': 1, 'PG': 2, 'PG-13': 3, 'PG13': 3, 'R': 4, 'X': 5,
+                'NC-17': 6, 'NC17': 6, 'NR': 8, 'UNRATED': 8, 'G1': 1,
+                'P2': 2, 'P3': 3, 'R4': 4, 'X5': 5, 'N6': 6, 'N8': 8}
 
-STAR_RATINGS = {'1': 'x1', '1.5': 'x2', '2': 'x3', '2.5': 'x4',
-                '3': 'x5', '3.5': 'x6', '4': 'x7',
-                '*': 'x1', '**': 'x3', '***': 'x5', '****': 'x7'}
+STAR_RATINGS = {'1': 1, '1.5': 2, '2': 3, '2.5': 4, '3': 5, '3.5': 6,
+                '4': 7, '*': 1, '**': 3, '***': 5, '****': 7}
 
-HUMAN = {'mpaaRating': {'G1': 'G', 'P2': 'PG', 'P3': 'PG-13', 'R4': 'R',
-                        'X5': 'X', 'N6': 'NC-17', 'N8': 'Unrated'},
-         'tvRating': {'x1': 'TV-Y7', 'x2': 'TV-Y', 'x3': 'TV-G',
-                      'x4': 'TV-PG', 'x5': 'TV-14', 'x6': 'TV-MA',
-                      'x7': 'Unrated'},
-         'starRating': {'x1': '1', 'x2': '1.5', 'x3': '2', 'x4': '2.5',
-                        'x5': '3', 'x6': '3.5', 'x7': '4'}}
+HUMAN = {'mpaaRating': {1: 'G', 2: 'PG', 3: 'PG-13', 4: 'R', 5: 'X',
+                        6: 'NC-17', 8: 'NR'},
+         'tvRating': {1: 'Y7', 2: 'Y', 3: 'G', 4: 'PG', 5: '14',
+                      6: 'MA', 7: 'NR'},
+         'starRating': {1: '1', 2: '1.5', 3: '2', 4: '2.5', 5: '3',
+                        6: '3.5', 7: '4'}}
 
 BOM = '\xef\xbb\xbf'
 
 tivo_cache = LRUCache(50)
 mp4_cache = LRUCache(50)
 dvrms_cache = LRUCache(50)
+nfo_cache = LRUCache(50)
 
 mswindows = (sys.platform == "win32")
+
+def get_mpaa(rating):
+    return HUMAN['mpaaRating'].get(rating, 'NR')
+
+def get_tv(rating):
+    return HUMAN['tvRating'].get(rating, 'NR')
+
+def get_stars(rating):
+    return HUMAN['starRating'].get(rating, '')
 
 def tag_data(element, tag):
     for name in tag.split('/'):
@@ -68,12 +78,20 @@ def _vtag_data(element, tag):
     elements = element.getElementsByTagName('element')
     return [x.firstChild.data for x in elements if x.firstChild]
 
+def _vtag_data_alternate(element, tag):
+    elements = [element]
+    for name in tag.split('/'):
+        new_elements = []
+        for elmt in elements:
+            new_elements += elmt.getElementsByTagName(name)
+        elements = new_elements
+    return [x.firstChild.data for x in elements if x.firstChild]
+
 def _tag_value(element, tag):
     item = element.getElementsByTagName(tag)
     if item:
         value = item[0].attributes['value'].value
-        name = item[0].firstChild.data
-        return name[0] + value[0]
+        return int(value[0])
 
 def from_moov(full_path):
     if full_path in mp4_cache:
@@ -147,19 +165,8 @@ def from_moov(full_path):
     mp4_cache[full_path] = metadata
     return metadata
 
-def from_dvrms(full_path):
-    if full_path in dvrms_cache:
-        return dvrms_cache[full_path]
-
+def from_mscore(rawmeta):
     metadata = {}
-
-    try:
-        meta = mutagen.File(unicode(full_path, 'utf-8'))
-        assert(meta)
-    except:
-        dvrms_cache[full_path] = {}
-        return {}
-
     keys = {'title': ['Title'],
             'description': ['Description', 'WM/SubTitleDescription'],
             'episodeTitle': ['WM/SubTitle'],
@@ -172,8 +179,10 @@ def from_dvrms(full_path):
     for tagname in keys:
         for tag in keys[tagname]:
             try:
-                if tag in meta:
-                    value = str(meta[tag][0])
+                if tag in rawmeta:
+                    value = rawmeta[tag][0]
+                    if type(value) not in (str, unicode):
+                        value = str(value)
                     if value:
                         metadata[tagname] = value
             except:
@@ -198,6 +207,20 @@ def from_dvrms(full_path):
             metadata['tvRating'] = TV_RATINGS[rating]
         del metadata['rating']
 
+    return metadata
+
+def from_dvrms(full_path):
+    if full_path in dvrms_cache:
+        return dvrms_cache[full_path]
+
+    try:
+        rawmeta = mutagen.File(unicode(full_path, 'utf-8'))
+        assert(rawmeta)
+    except:
+        dvrms_cache[full_path] = {}
+        return {}
+
+    metadata = from_mscore(rawmeta)
     dvrms_cache[full_path] = metadata
     return metadata
 
@@ -206,7 +229,7 @@ def from_eyetv(full_path):
             'DESCRIPTION': 'description', 'YEAR': 'movieYear',
             'EPISODENUM': 'episodeNumber'}
     metadata = {}
-    path, name = os.path.split(unicode(full_path, 'utf-8'))
+    path = os.path.dirname(unicode(full_path, 'utf-8'))
     eyetvp = [x for x in os.listdir(path) if x.endswith('.eyetvp')][0]
     eyetvp = os.path.join(path, eyetvp)
     eyetv = plistlib.readPlist(eyetvp)
@@ -225,9 +248,9 @@ def from_eyetv(full_path):
         for ptag, etag, ratings in [('tvRating', 'TV_RATING', TV_RATINGS),
                               ('mpaaRating', 'MPAA_RATING', MPAA_RATINGS),
                               ('starRating', 'STAR_RATING', STAR_RATINGS)]:
-           x = info[etag].upper()
-           if x and x in ratings:
-               metadata[ptag] = ratings[x]
+            x = info[etag].upper()
+            if x and x in ratings:
+                metadata[ptag] = ratings[x]
 
         # movieYear must be set for the mpaa/star ratings to work
         if (('mpaaRating' in metadata or 'starRating' in metadata) and
@@ -237,15 +260,30 @@ def from_eyetv(full_path):
 
 def from_text(full_path):
     metadata = {}
-    path, name = os.path.split(unicode(full_path, 'utf-8'))
+    full_path = unicode(full_path, 'utf-8')
+    path, name = os.path.split(full_path)
     title, ext = os.path.splitext(name)
 
-    for metafile in [config.get_server('default_metadata_file'),
-                     os.path.join(path, title) + '.properties',
-                     os.path.join(path, 'default.txt'), full_path + '.txt',
+    search_paths = []
+    ptmp = full_path
+    while ptmp:
+        parent = os.path.dirname(ptmp)
+        if ptmp != parent:
+            ptmp = parent
+        else:
+            break
+        search_paths.append(os.path.join(ptmp, 'default.txt'))
+
+    search_paths.append(os.path.join(path, title) + '.properties')
+    search_paths.append(config.get_server('default_metadata_file'))
+    search_paths.reverse()
+
+    search_paths += [full_path + '.txt',
                      os.path.join(path, '.meta', 'default.txt'),
-                     os.path.join(path, '.meta', name) + '.txt']:
-        if metafile and os.path.exists(metafile):
+                     os.path.join(path, '.meta', name) + '.txt']
+
+    for metafile in search_paths:
+        if os.path.exists(metafile):
             sep = ':='[metafile.endswith('.properties')]
             for line in file(metafile, 'U'):
                 if line.startswith(BOM):
@@ -278,7 +316,7 @@ def basic(full_path):
     mtime = os.stat(unicode(full_path, 'utf-8')).st_mtime
     if (mtime < 0):
         mtime = 0
-    originalAirDate = datetime.fromtimestamp(mtime)
+    originalAirDate = datetime.utcfromtimestamp(mtime)
 
     metadata = {'title': title,
                 'originalAirDate': originalAirDate.isoformat()}
@@ -289,6 +327,7 @@ def basic(full_path):
         metadata.update(from_dvrms(full_path))
     elif 'plistlib' in sys.modules and base_path.endswith('.eyetv'):
         metadata.update(from_eyetv(full_path))
+    metadata.update(from_nfo(full_path))
     metadata.update(from_text(full_path))
 
     return metadata
@@ -299,7 +338,8 @@ def from_container(xmldoc):
     keys = {'title': 'Title', 'episodeTitle': 'EpisodeTitle',
             'description': 'Description', 'seriesId': 'SeriesId',
             'episodeNumber': 'EpisodeNumber', 'tvRating': 'TvRating',
-            'displayMajorNumber': 'SourceChannel', 'callsign': 'SourceStation'}
+            'displayMajorNumber': 'SourceChannel', 'callsign': 'SourceStation',
+            'showingBits': 'ShowingBits', 'mpaaRating': 'MpaaRating'}
 
     details = xmldoc.getElementsByTagName('Details')[0]
 
@@ -309,7 +349,7 @@ def from_container(xmldoc):
             if key == 'description':
                 data = data.replace(TRIBUNE_CR, '')
             elif key == 'tvRating':
-                data = 'x' + data
+                data = int(data)
             elif key == 'displayMajorNumber':
                 if '-' in data:
                     data, metadata['displayMinorNumber'] = data.split('-')
@@ -357,15 +397,212 @@ def from_details(xml):
     if sb:
         metadata['showingBits'] = sb[0].attributes['value'].value
 
-    for tag in ['starRating', 'mpaaRating', 'colorCode']:
+    #for tag in ['starRating', 'mpaaRating', 'colorCode']:
+    for tag in ['starRating', 'mpaaRating']:
         value = _tag_value(program, tag)
         if value:
             metadata[tag] = value
 
     rating = _tag_value(showing, 'tvRating')
     if rating:
-        metadata['tvRating'] = 'x' + rating[1]
+        metadata['tvRating'] = rating
 
+    return metadata
+
+def _nfo_vitems(source, metadata):
+
+    vItems = {'vGenre': 'genre',
+              'vWriter': 'credits',
+              'vDirector': 'director',
+              'vActor': 'actor/name'}
+
+    for key in vItems:
+        data = _vtag_data_alternate(source, vItems[key])
+        if data:
+            metadata.setdefault(key, [])
+            for dat in data:
+                if not dat in metadata[key]:
+                    metadata[key].append(dat)
+
+    if 'vGenre' in metadata:
+        metadata['vSeriesGenre'] = metadata['vProgramGenre'] = metadata['vGenre']
+
+    return metadata
+
+def _parse_nfo(nfo_path, nfo_data=None):
+    # nfo files can contain XML or a URL to seed the XBMC metadata scrapers
+    # It's also possible to have both (a URL after the XML metadata)
+    # pyTivo only parses the XML metadata, but we'll try to stip the URL
+    # from mixed XML/URL files.  Returns `None` when XML can't be parsed.
+    if nfo_data is None:
+        nfo_data = [line.strip() for line in file(nfo_path, 'rU')]
+    xmldoc = None
+    try:
+        xmldoc = minidom.parseString(os.linesep.join(nfo_data))
+    except expat.ExpatError, err:
+        import ipdb; ipdb.set_trace()
+        if expat.ErrorString(err.code) == expat.errors.XML_ERROR_INVALID_TOKEN:
+            # might be a URL outside the xml
+            while len(nfo_data) > err.lineno:
+                if len(nfo_data[-1]) == 0:
+                    nfo_data.pop()
+                else:
+                    break
+            if len(nfo_data) == err.lineno:
+                # last non-blank line contains the error
+                nfo_data.pop()
+                return _parse_nfo(nfo_path, nfo_data)
+    return xmldoc
+
+def _from_tvshow_nfo(tvshow_nfo_path):
+    if tvshow_nfo_path in nfo_cache:
+        return nfo_cache[tvshow_nfo_path]
+
+    items = {'description': 'plot',
+             'title': 'title',
+             'seriesTitle': 'showtitle',
+             'starRating': 'rating',
+             'tvRating': 'mpaa'}
+
+    nfo_cache[tvshow_nfo_path] = metadata = {}
+
+    xmldoc = _parse_nfo(tvshow_nfo_path)
+    if not xmldoc:
+        return metadata
+
+    tvshow = xmldoc.getElementsByTagName('tvshow')
+    if tvshow:
+        tvshow = tvshow[0]
+    else:
+        return metadata
+
+    for item in items:
+        data = tag_data(tvshow, items[item])
+        if data:
+            metadata[item] = data
+
+    metadata = _nfo_vitems(tvshow, metadata)
+
+    nfo_cache[tvshow_nfo_path] = metadata
+    return metadata
+
+def _from_episode_nfo(nfo_path, xmldoc):
+    metadata = {}
+
+    items = {'description': 'plot',
+             'episodeTitle': 'title',
+             'seriesTitle': 'showtitle',
+             'originalAirDate': 'aired',
+             'starRating': 'rating',
+             'tvRating': 'mpaa'}
+
+    # find tvshow.nfo
+    path = nfo_path
+    while True:
+        basepath = os.path.dirname(path)
+        if path == basepath:
+            break
+        path = basepath
+        tv_nfo = os.path.join(path, 'tvshow.nfo')
+        if os.path.exists(tv_nfo):
+            metadata.update(_from_tvshow_nfo(tv_nfo))
+            break
+
+    episode = xmldoc.getElementsByTagName('episodedetails')
+    if episode:
+        episode = episode[0]
+    else:
+        return metadata
+
+    metadata['isEpisode'] = 'true'
+    for item in items:
+        data = tag_data(episode, items[item])
+        if data:
+            metadata[item] = data
+
+    season = tag_data(episode, 'displayseason')
+    if not season or season == "-1":
+        season = tag_data(episode, 'season')
+    if not season:
+        season = 1
+
+    ep_num = tag_data(episode, 'displayepisode')
+    if not ep_num or ep_num == "-1":
+        ep_num = tag_data(episode, 'episode')
+    if ep_num and ep_num != "-1":
+        metadata['episodeNumber'] = "%d%02d" % (int(season), int(ep_num))
+
+    if 'originalAirDate' in metadata:
+        metadata['originalAirDate'] += 'T00:00:00Z'
+
+    metadata = _nfo_vitems(episode, metadata)
+
+    return metadata
+
+def _from_movie_nfo(xmldoc):
+    metadata = {}
+
+    movie = xmldoc.getElementsByTagName('movie')
+    if movie:
+        movie = movie[0]
+    else:
+        return metadata
+
+    items = {'description': 'plot',
+             'title': 'title',
+             'movieYear': 'year',
+             'starRating': 'rating',
+             'mpaaRating': 'mpaa'}
+
+    metadata['isEpisode'] = 'false'
+
+    for item in items:
+        data = tag_data(movie, items[item])
+        if data:
+            metadata[item] = data
+
+    metadata['movieYear'] = "%04d" % int(metadata.get('movieYear', 0))
+
+    metadata = _nfo_vitems(movie, metadata)
+    return metadata
+
+def from_nfo(full_path):
+    if full_path in nfo_cache:
+        return nfo_cache[full_path]
+
+    metadata = nfo_cache[full_path] = {}
+
+    nfo_path = "%s.nfo" % os.path.splitext(full_path)[0]
+    if not os.path.exists(nfo_path):
+        return metadata
+
+    xmldoc = _parse_nfo(nfo_path)
+    if not xmldoc:
+        return metadata
+
+    if xmldoc.getElementsByTagName('episodedetails'):
+        # it's an episode
+        metadata.update(_from_episode_nfo(nfo_path, xmldoc))
+    elif xmldoc.getElementsByTagName('movie'):
+        # it's a movie
+        metadata.update(_from_movie_nfo(xmldoc))
+
+    # common nfo cleanup
+    if 'starRating' in metadata:
+        # .NFO 0-10 -> TiVo 1-7
+        rating = int(float(metadata['starRating']) * 6 / 10 + 1.5)
+        metadata['starRating'] = rating
+
+    for key, mapping in [('mpaaRating', MPAA_RATINGS),
+                         ('tvRating', TV_RATINGS)]:
+        if key in metadata:
+            rating = mapping.get(metadata[key], None)
+            if rating:
+                metadata[key] = str(rating)
+            else:
+                del metadata[key]
+
+    nfo_cache[full_path] = metadata
     return metadata
 
 def from_tivo(full_path):
@@ -374,7 +611,8 @@ def from_tivo(full_path):
 
     tdcat_path = config.get_bin('tdcat')
     tivo_mak = config.get_server('tivo_mak')
-    if tdcat_path and tivo_mak:
+    try:
+        assert(tdcat_path and tivo_mak)
         fname = unicode(full_path, 'utf-8')
         if mswindows:
             fname = fname.encode('iso8859-1')
@@ -382,7 +620,7 @@ def from_tivo(full_path):
         tdcat = subprocess.Popen(tcmd, stdout=subprocess.PIPE)
         metadata = from_details(tdcat.stdout)
         tivo_cache[full_path] = metadata
-    else:
+    except:
         metadata = {}
 
     return metadata
@@ -410,7 +648,7 @@ def dump(output, metadata):
             else:
                 output.write('%s: %s\n' % (key, value.encode('utf-8')))
 
-if __name__ == '__main__':        
+if __name__ == '__main__':
     if len(sys.argv) > 1:
         metadata = {}
         fname = force_utf8(sys.argv[1])
@@ -422,4 +660,7 @@ if __name__ == '__main__':
             metadata.update(from_moov(fname))
         elif ext in ['.dvr-ms', '.asf', '.wmv']:
             metadata.update(from_dvrms(fname))
+        elif ext == '.wtv':
+            vInfo = plugins.video.transcode.video_info(fname)
+            metadata.update(from_mscore(vInfo['rawmeta']))
         dump(sys.stdout, metadata)

@@ -91,9 +91,7 @@ class ToGo(Plugin):
     def NPL(self, handler, query):
         global basic_meta
         shows_per_page = 50 # Change this to alter the number of shows returned
-        cname = query['Container'][0].split('/')[0]
         folder = ''
-        tivo_mak = config.get_server('tivo_mak')
         has_tivodecode = bool(config.get_bin('tivodecode'))
 
         if 'TiVo' in query:
@@ -101,9 +99,9 @@ class ToGo(Plugin):
             locally_exists = self.get_saved_ids()
 
             tivoIP = query['TiVo'][0]
-            tivos_by_ip = dict([(value, key)
-                                for key, value in config.tivos.items()])
-            tivo_name = config.tivo_names[tivos_by_ip[tivoIP]]
+            tsn = config.tivos_by_ip(tivoIP)
+            tivo_name = config.tivo_names[tsn]
+            tivo_mak = config.get_tsn('tivo_mak', tsn)
             theurl = ('https://' + tivoIP +
                       '/TiVoConnect?Command=QueryContainer&ItemCount=' +
                       str(shows_per_page) + '&Container=/NowPlaying')
@@ -193,7 +191,6 @@ class ToGo(Plugin):
             ItemCount = 0
             FirstAnchor = ''
 
-        cname = query['Container'][0].split('/')[0]
         t = Template(NPL_TEMPLATE, filter=EncodeUnicode)
         t.escape = escape
         t.quote = quote
@@ -204,7 +201,7 @@ class ToGo(Plugin):
         t.has_tivodecode = has_tivodecode
         t.tname = tivo_name
         t.tivoIP = tivoIP
-        t.container = cname
+        t.container = handler.cname
         t.data = data
         t.len = len
         t.TotalItems = int(TotalItems)
@@ -212,12 +209,7 @@ class ToGo(Plugin):
         t.ItemCount = int(ItemCount)
         t.FirstAnchor = quote(FirstAnchor)
         t.shows_per_page = shows_per_page
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'text/html; charset=utf-8')
-        handler.send_header('Refresh', '300')
-        handler.send_header('Expires', '0')
-        handler.end_headers()
-        handler.wfile.write(t)
+        handler.send_html(str(t), refresh='300')
 
     def get_tivo_file(self, tivoIP, url, mak, togo_path):
         # global status
@@ -248,14 +240,18 @@ class ToGo(Plugin):
         auth_handler.add_password('TiVo DVR', url, 'tivo', mak)
         try:
             handle = self.tivo_open(url)
-        except IOError, e:
+        except urllib2.HTTPError, e:
             status[url]['running'] = False
             status[url]['error'] = e.code
+            logger.error(e.code)
+            return
+        except urllib2.URLError, e:
+            status[url]['running'] = False
+            status[url]['error'] = e.reason
+            logger.error(e.reason)
             return
 
-        tivos_by_ip = dict([(value, key)
-                            for key, value in config.tivos.items()])
-        tivo_name = config.tivo_names[tivos_by_ip[tivoIP]]
+        tivo_name = config.tivo_names[config.tivos_by_ip(tivoIP)]
 
         logger.info('[%s] Start getting "%s" from %s' %
                     (time.strftime('%d/%b/%Y %H:%M:%S'), outfile, tivo_name))
@@ -271,6 +267,7 @@ class ToGo(Plugin):
         length = 0
         start_time = time.time()
         last_interval = start_time
+        now = start_time
         try:
             while status[url]['running']:
                 output = handle.read(1024000)
@@ -289,6 +286,7 @@ class ToGo(Plugin):
             if status[url]['running']:
                 status[url]['finished'] = True
         except Exception, msg:
+            status[url]['running'] = False
             logger.info(msg)
             status[url]['error'] = msg 
         handle.close()
@@ -325,13 +323,14 @@ class ToGo(Plugin):
         del queue[tivoIP]
 
     def ToGo(self, handler, query):
-        tivo_mak = config.get_server('tivo_mak')
         togo_path = config.get_server('togo_path')
         for name, data in config.getShares():
             if togo_path == name:
                 togo_path = data.get('path')
-        if tivo_mak and togo_path:
+        if togo_path:
             tivoIP = query['TiVo'][0]
+            tsn = config.tivos_by_ip(tivoIP)
+            tivo_mak = config.get_tsn('tivo_mak', tsn)
             urls = query.get('Url', [])
             decode = 'decode' in query
             save = 'save' in query

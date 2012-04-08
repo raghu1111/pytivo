@@ -20,12 +20,12 @@ except ImportError:
 import xmpp
 import mind
 import config
-from plugins.video.video import Video, VideoDetails
+from plugins.video.video import BaseVideo, VideoDetails
 from plugins.video.transcode import tivo_compatible
 
 CLASS_NAME = 'WebVideo'
 
-class WebVideo(Video):
+class WebVideo(BaseVideo):
 
     CONTENT_TYPE = 'x-not-for/tivo'
 
@@ -149,7 +149,7 @@ class WebVideo(Video):
 
                 data['url'] = ('http://%s:%s' % (ip, port) +
                                urllib.quote('/%s/%s' % (share_name,
-                                            os.path.split(file_name)[-1])))
+                                            os.path.basename(file_name))))
                 data['duration'] = file_info['duration'] / 1000
                 data['size'] = file_info['size']
 

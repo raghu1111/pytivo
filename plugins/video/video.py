@@ -1,3 +1,4 @@
+import calendar
 import cgi
 import logging
 import os
@@ -34,16 +35,17 @@ PUSHED = '<h3>Queued for Push to %s</h3> <p>%s</p>'
 def tmpl(name):
     return file(os.path.join(SCRIPTDIR, 'templates', name), 'rb').read()
 
-CONTAINER_TEMPLATE = tmpl('container.tmpl')
+HTML_CONTAINER_TEMPLATE = tmpl('container_html.tmpl')
+XML_CONTAINER_TEMPLATE = tmpl('container_xml.tmpl')
 TVBUS_TEMPLATE = tmpl('TvBus.tmpl')
 
-EXTENSIONS = """.tivo .mpg .avi .wmv .mov .flv .vob .mp4 .m4v .mkv .ts 
-.tp .trp .3g2 .3gp .3gp2 .3gpp .amv .asf .avs .bik .bix .box .bsf .dat 
-.dif .divx .dmb .dpg .dv .dvr-ms .evo .eye .flc .fli .flx .gvi .ivf .m1v 
-.m21 .m2t .m2ts .m2v .m2p .m4e .mjp .mjpeg .mod .moov .movie .mp21 .mpe 
-.mpeg .mpv .mpv2 .mqv .mts .mvb .nsv .nuv .nut .ogm .qt .rm .rmvb .rts 
-.scm .smv .ssm .svi .vdo .vfw .vid .viv .vivo .vp6 .vp7 .vro .wm .wmd 
-.yuv""".split()
+EXTENSIONS = """.tivo .mpg .avi .wmv .mov .flv .f4v .vob .mp4 .m4v .mkv
+.ts .tp .trp .3g2 .3gp .3gp2 .3gpp .amv .asf .avs .bik .bix .box .bsf
+.dat .dif .divx .dmb .dpg .dv .dvr-ms .evo .eye .flc .fli .flx .gvi .ivf
+.m1v .m21 .m2t .m2ts .m2v .m2p .m4e .mjp .mjpeg .mod .moov .movie .mp21
+.mpe .mpeg .mpv .mpv2 .mqv .mts .mvb .nsv .nuv .nut .ogm .qt .rm .rmvb
+.rts .scm .smv .ssm .svi .vdo .vfw .vid .viv .vivo .vp6 .vp7 .vro .webm
+.wm .wmd .wtv .yuv""".split()
 
 use_extensions = True
 try:
@@ -53,7 +55,117 @@ except:
 
 queue = []  # Recordings to push
 
-class Video(Plugin):
+def uniso(iso):
+    return time.strptime(iso[:19], '%Y-%m-%dT%H:%M:%S')
+
+def isodt(iso):
+    return datetime(*uniso(iso)[:6])
+
+def isogm(iso):
+    return int(calendar.timegm(uniso(iso)))
+
+class Pushable(object):
+
+    def push_one_file(self, f):
+        file_info = VideoDetails()
+        file_info['valid'] = transcode.supported_format(f['path'])
+
+        mime = 'video/mpeg'
+        if config.isHDtivo(f['tsn']):
+            for m in ['video/mp4', 'video/bif']:
+                if transcode.tivo_compatible(f['path'], f['tsn'], m)[0]:
+                    mime = m
+                    break
+
+            if (mime == 'video/mpeg' and
+                transcode.mp4_remuxable(f['path'], f['tsn'])):
+                new_path = transcode.mp4_remux(f['path'], f['name'], f['tsn'])
+                if new_path:
+                    mime = 'video/mp4'
+                    f['name'] = new_path
+
+        if file_info['valid']:
+            file_info.update(self.metadata_full(f['path'], f['tsn'], mime))
+
+        url = f['url'] + quote(f['name'])
+
+        title = file_info['seriesTitle']
+        if not title:
+            title = file_info['title']
+
+        source = file_info['seriesId']
+        if not source:
+            source = title
+
+        subtitle = file_info['episodeTitle']
+        try:
+            m = mind.getMind(f['tsn'])
+            m.pushVideo(
+                tsn = f['tsn'],
+                url = url,
+                description = file_info['description'],
+                duration = file_info['duration'] / 1000,
+                size = file_info['size'],
+                title = title,
+                subtitle = subtitle,
+                source = source,
+                mime = mime,
+                tvrating = file_info['tvRating'])
+        except Exception, msg:
+            logger.error(msg)
+
+    def process_queue(self):
+        while queue:
+            time.sleep(5)
+            item = queue.pop(0)
+            self.push_one_file(item)
+
+    def readip(self):
+        """ returns your external IP address by querying dyndns.org """
+        f = urllib.urlopen('http://checkip.dyndns.org/')
+        s = f.read()
+        m = re.search('([\d]*\.[\d]*\.[\d]*\.[\d]*)', s)
+        return m.group(0)
+
+    def Push(self, handler, query):
+        tsn = query['tsn'][0]
+        for key in config.tivo_names:
+            if config.tivo_names[key] == tsn:
+                tsn = key
+                break
+        tivo_name = config.tivo_names.get(tsn, tsn)
+
+        container = quote(query['Container'][0].split('/')[0])
+        ip = config.get_ip(tsn)
+        port = config.getPort()
+
+        baseurl = 'http://%s:%s/%s' % (ip, port, container)
+        if config.getIsExternal(tsn):
+            exturl = config.get_server('externalurl')
+            if exturl:
+                baseurl = exturl
+            else:
+                ip = self.readip()
+                baseurl = 'http://%s:%s/%s' % (ip, port, container)
+ 
+        path = self.get_local_base_path(handler, query)
+
+        files = query.get('File', [])
+        for f in files:
+            file_path = path + os.path.normpath(f)
+            queue.append({'path': file_path, 'name': f, 'tsn': tsn,
+                          'url': baseurl})
+            if len(queue) == 1:
+                thread.start_new_thread(Video.process_queue, (self,))
+
+            logger.info('[%s] Queued "%s" for Push to %s' %
+                        (time.strftime('%d/%b/%Y %H:%M:%S'),
+                         unicode(file_path, 'utf-8'), tivo_name))
+
+        files = [unicode(f, 'utf-8') for f in files]
+        handler.redir(PUSHED % (tivo_name, '<br>'.join(files)), 5)
+
+class BaseVideo(Plugin):
 
     CONTENT_TYPE = 'x-container/tivo-videos'
 
@@ -72,14 +184,11 @@ class Video(Plugin):
             return transcode.supported_format(full_path)
 
     def send_file(self, handler, path, query):
-        mime = 'video/mpeg'
+        mime = 'video/x-tivo-mpeg'
         tsn = handler.headers.getheader('tsn', '')
         tivo_name = config.tivo_names.get(tsn, tsn)
 
         is_tivo_file = (path[-5:].lower() == '.tivo')
-
-        if is_tivo_file and transcode.tivo_compatible(path, tsn, mime)[0]:
-            mime = 'video/x-tivo-mpeg'
 
         if 'Format' in query:
             mime = query['Format'][0]
@@ -88,9 +197,10 @@ class Video(Plugin):
         compatible = (not needs_tivodecode and
                       transcode.tivo_compatible(path, tsn, mime)[0])
 
-        offset = handler.headers.getheader('Range')
-        if offset:
-            offset = int(offset[6:-1])  # "bytes=XXX-"
+        try:  # "bytes=XXX-"
+            offset = int(handler.headers.getheader('Range')[6:-1])
+        except:
+            offset = 0
 
         if needs_tivodecode:
             valid = bool(config.get_bin('tivodecode') and
@@ -102,15 +212,24 @@ class Video(Plugin):
             valid = ((compatible and offset < os.stat(path).st_size) or
                      (not compatible and transcode.is_resumable(path, offset)))
 
+        #faking = (mime in ['video/x-tivo-mpeg-ts', 'video/x-tivo-mpeg'] and
+        faking = (mime == 'video/x-tivo-mpeg' and
+                  not (is_tivo_file and compatible))
         fname = unicode(path, 'utf-8')
-        handler.send_response(206)
+        thead = ''
+        if faking:
+            thead = self.tivo_header(tsn, path, mime)
+        if compatible:
+            size = os.stat(fname).st_size + len(thead)
+            handler.send_response(200)
+            handler.send_header('Content-Length', size - offset)
+            handler.send_header('Content-Range', 'bytes %d-%d/%d' % 
+                                (offset, size - offset - 1, size))
+        else:
+            handler.send_response(206)
+            handler.send_header('Transfer-Encoding', 'chunked')
         handler.send_header('Content-Type', mime)
         handler.send_header('Connection', 'close')
-        if compatible:
-            handler.send_header('Content-Length',
-                                os.stat(fname).st_size - offset)
-        else:
-            handler.send_header('Transfer-Encoding', 'chunked')
         handler.end_headers()
 
         logger.info('[%s] Start sending "%s" to %s' %
@@ -120,6 +239,8 @@ class Video(Plugin):
 
         if valid:
             if compatible:
+                if faking and not offset:
+                    handler.wfile.write(thead)
                 logger.debug('"%s" is tivo compatible' % fname)
                 f = open(fname, 'rb')
                 try:
@@ -127,6 +248,7 @@ class Video(Plugin):
                         count = qtfaststart.process(f, handler.wfile, offset)
                     else:
                         if offset:
+                            offset -= len(thead)
                             f.seek(offset)
                         while True:
                             block = f.read(512 * 1024)
@@ -143,8 +265,8 @@ class Video(Plugin):
                     count = transcode.resume_transfer(path, handler.wfile, 
                                                       offset)
                 else:
-                    count = transcode.transcode(False, path,
-                                                handler.wfile, tsn)
+                    count = transcode.transcode(False, path, handler.wfile,
+                                                tsn, mime, thead)
         try:
             if not compatible:
                  handler.wfile.write('0\r\n\r\n')
@@ -216,6 +338,8 @@ class Video(Plugin):
         data.update(metadata.basic(full_path))
         if full_path[-5:].lower() == '.tivo':
             data.update(metadata.from_tivo(full_path))
+        if full_path[-4:].lower() == '.wtv':
+            data.update(metadata.from_mscore(vInfo['rawmeta']))
 
         if 'episodeNumber' in data:
             try:
@@ -230,7 +354,7 @@ class Video(Plugin):
                 transcode_options = {}
             else:
                 transcode_options = transcode.transcode(True, full_path,
-                                                        '', tsn)
+                                                        '', tsn, mime)
             data['vHost'] = (
                 ['TRANSCODE=%s, %s' % (['YES', 'NO'][compatible], reason)] +
                 ['SOURCE INFO: '] +
@@ -238,7 +362,7 @@ class Video(Plugin):
                  for k, v in sorted(vInfo.items(), reverse=True)] +
                 ['TRANSCODE OPTIONS: '] +
                 ["%s" % (v) for k, v in transcode_options.items()] +
-                ['SOURCE FILE: ', os.path.split(full_path)[1]]
+                ['SOURCE FILE: ', os.path.basename(full_path)]
             )
 
         now = datetime.utcnow()
@@ -252,12 +376,10 @@ class Video(Plugin):
                 except:
                     logger.warning('Bad file time on ' + full_path)
             elif data['time'].lower() == 'oad':
-                    now = datetime.strptime(data['originalAirDate'][:19],
-                                            '%Y-%m-%dT%H:%M:%S')
+                    now = isodt(data['originalAirDate'])
             else:
                 try:
-                    now = datetime.strptime(data['time'][:19],
-                                            '%Y-%m-%dT%H:%M:%S')
+                    now = isodt(data['time'])
                 except:
                     logger.warning('Bad time format: ' + data['time'] +
                                    ' , using current time')
@@ -282,16 +404,15 @@ class Video(Plugin):
     def QueryContainer(self, handler, query):
         tsn = handler.headers.getheader('tsn', '')
         subcname = query['Container'][0]
-        cname = subcname.split('/')[0]
 
-        if (not cname in handler.server.containers or
-            not self.get_local_path(handler, query)):
+        if not self.get_local_path(handler, query):
             handler.send_error(404)
             return
 
-        container = handler.server.containers[cname]
+        container = handler.container
         precache = container.get('precache', 'False').lower() == 'true'
         force_alpha = container.get('force_alpha', 'False').lower() == 'true'
+        use_html = query.get('Format', [''])[0].lower() == 'text/html'
 
         files, total, start = self.get_files(handler, query,
                                              self.video_file_filter,
@@ -310,12 +431,12 @@ class Video(Plugin):
                 ltime = time.localtime(mtime)
             video['captureDate'] = hex(mtime)
             video['textDate'] = time.strftime('%b %d, %Y', ltime)
-            video['name'] = os.path.split(f.name)[1]
+            video['name'] = os.path.basename(f.name)
             video['path'] = f.name
             video['part_path'] = f.name.replace(local_base_path, '', 1)
             if not video['part_path'].startswith(os.path.sep):
                 video['part_path'] = os.path.sep + video['part_path']
-            video['title'] = os.path.split(f.name)[1]
+            video['title'] = os.path.basename(f.name)
             video['is_dir'] = f.isdir
             if video['is_dir']:
                 video['small_path'] = subcname + '/' + video['name']
@@ -325,17 +446,27 @@ class Video(Plugin):
                     video['valid'] = transcode.supported_format(f.name)
                     if video['valid']:
                         video.update(self.metadata_full(f.name, tsn))
+                        if len(files) == 1:
+                            video['captureDate'] = hex(isogm(video['time']))
                 else:
                     video['valid'] = True
                     video.update(metadata.basic(f.name))
+
+                if config.hasTStivo(tsn):
+                    video['mime'] = 'video/x-tivo-mpeg-ts'
+                else:
+                    video['mime'] = 'video/x-tivo-mpeg'
 
                 video['textSize'] = ( '%.3f GB' %
                     (float(f.size) / (1024 ** 3)) )
 
             videos.append(video)
 
-        t = Template(CONTAINER_TEMPLATE, filter=EncodeUnicode)
-        t.container = cname
+        if use_html:
+            t = Template(HTML_CONTAINER_TEMPLATE, filter=EncodeUnicode)
+        else:
+            t = Template(XML_CONTAINER_TEMPLATE, filter=EncodeUnicode)
+        t.container = handler.cname
         t.name = subcname
         t.total = total
         t.start = start
@@ -346,11 +477,10 @@ class Video(Plugin):
         t.guid = config.getGUID()
         t.tivos = config.tivos
         t.tivo_names = config.tivo_names
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'text/xml')
-        handler.send_header('Expires', '0')
-        handler.end_headers()
-        handler.wfile.write(t)
+        if use_html:
+            handler.send_html(str(t))
+        else:
+            handler.send_xml(str(t))
 
     def get_details_xml(self, tsn, file_path):
         if (tsn, file_path) in self.tvbus_cache:
@@ -364,11 +494,18 @@ class Video(Plugin):
             t = Template(TVBUS_TEMPLATE, filter=EncodeUnicode)
             t.video = file_info
             t.escape = escape
+            t.get_tv = metadata.get_tv
+            t.get_mpaa = metadata.get_mpaa
+            t.get_stars = metadata.get_stars
             details = str(t)
             self.tvbus_cache[(tsn, file_path)] = details
         return details
 
-    def tivo_header(self, tsn, path, flag=13):
+    def tivo_header(self, tsn, path, mime):
+        if mime == 'video/x-tivo-mpeg-ts':
+            flag = 45
+        else:
+            flag = 13
         details = self.get_details_xml(tsn, path)
         ld = len(details)
         chunklen = ld * 2 + 44
@@ -389,112 +526,10 @@ class Video(Plugin):
 
         details = self.get_details_xml(tsn, file_path)
 
-        handler.send_response(200)
-        handler.send_header('Content-Type', 'text/xml')
-        handler.send_header('Content-Length', len(details))
-        handler.send_header('Connection', 'close')
-        handler.send_header('Expires', '0')
-        handler.end_headers()
-        handler.wfile.write(details)
+        handler.send_xml(details)
 
-    def push_one_file(self, f):
-        file_info = VideoDetails()
-        file_info['valid'] = transcode.supported_format(f['path'])
-
-        mime = 'video/mpeg'
-        if config.isHDtivo(f['tsn']):
-            for m in ['video/mp4', 'video/bif']:
-                if transcode.tivo_compatible(f['path'], f['tsn'], m)[0]:
-                    mime = m
-                    break
-
-            if (mime == 'video/mpeg' and
-                transcode.mp4_remuxable(f['path'], f['tsn'])):
-                new_path = transcode.mp4_remux(f['path'], f['name'])
-                if new_path:
-                    mime = 'video/mp4'
-                    f['name'] = new_path
-
-        if file_info['valid']:
-            file_info.update(self.metadata_full(f['path'], f['tsn'], mime))
-
-        url = f['url'] + quote(f['name'])
-
-        title = file_info['seriesTitle']
-        if not title:
-            title = file_info['title']
-
-        source = file_info['seriesId']
-        if not source:
-            source = title
-
-        subtitle = file_info['episodeTitle']
-        try:
-            m = mind.getMind(f['tsn'])
-            m.pushVideo(
-                tsn = f['tsn'],
-                url = url,
-                description = file_info['description'],
-                duration = file_info['duration'] / 1000,
-                size = file_info['size'],
-                title = title,
-                subtitle = subtitle,
-                source = source,
-                mime = mime,
-                tvrating = file_info['tvRating'])
-        except Exception, msg:
-            logger.error(msg)
-
-    def process_queue(self):
-        while queue:
-            time.sleep(5)
-            item = queue.pop(0)
-            self.push_one_file(item)
-
-    def Push(self, handler, query):
-        tsn = query['tsn'][0]
-        for key in config.tivo_names:
-            if config.tivo_names[key] == tsn:
-                tsn = key
-                break
-        tivo_name = config.tivo_names.get(tsn, tsn)
-
-        container = quote(query['Container'][0].split('/')[0])
-        ip = config.get_ip()
-        port = config.getPort()
-
-        baseurl = 'http://%s:%s/%s' % (ip, port, container)
-        if config.getIsExternal(tsn):
-            exturl = config.get_server('externalurl')
-            if exturl:
-                baseurl = exturl
-            else:
-                ip = self.readip()
-                baseurl = 'http://%s:%s/%s' % (ip, port, container)
- 
-        path = self.get_local_base_path(handler, query)
-
-        files = query.get('File', [])
-        for f in files:
-            file_path = path + os.path.normpath(f)
-            queue.append({'path': file_path, 'name': f, 'tsn': tsn,
-                          'url': baseurl})
-            if len(queue) == 1:
-                thread.start_new_thread(Video.process_queue, (self,))
-
-            logger.info('[%s] Queued "%s" for Push to %s' %
-                        (time.strftime('%d/%b/%Y %H:%M:%S'),
-                         unicode(file_path, 'utf-8'), tivo_name))
-
-        files = [unicode(f, 'utf-8') for f in files]
-        handler.redir(PUSHED % (tivo_name, '<br>'.join(files)), 5)
-
-    def readip(self):
-        """ returns your external IP address by querying dyndns.org """
-        f = urllib.urlopen('http://checkip.dyndns.org/')
-        s = f.read()
-        m = re.search('([\d]*\.[\d]*\.[\d]*\.[\d]*)', s)
-        return m.group(0)
+class Video(BaseVideo, Pushable):
+        pass
 
 class VideoDetails(DictMixin):
 
@@ -530,7 +565,6 @@ class VideoDetails(DictMixin):
     def default(self, key):
         defaults = {
             'showingBits' : '0',
-            'episodeNumber' : '0',
             'displayMajorNumber' : '0',
             'displayMinorNumber' : '0',
             'isEpisode' : 'true',
